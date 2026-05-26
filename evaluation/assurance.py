@@ -25,23 +25,52 @@ class AssuranceReport:
 
 
 class RAIAssurance:
+    # Default heuristic thresholds — overridden by PARC-derived values when available
     THRESHOLDS = {
-        "mia_accuracy": ("<=", 0.52),
-        "dp_epsilon": ("<=", 5.0),
-        "dp_delta": ("<=", 1e-5),
-        "dcr_sigma": (">=", 5.0),
-        "delta_tpr": ("<=", 0.05),
-        "demographic_parity": (">=", 0.80),
-        "sds_pct": ("<=", 15.0),
-        "mt_violation_rate": ("<=", 10.0),
-        "dcs_score": (">=", 90.0),
-        "gradcam_iou": (">=", 0.60),
+        "mia_accuracy":            ("<=", 0.52),
+        "dp_epsilon":              ("<=", 5.0),
+        "dp_delta":                ("<=", 1e-5),
+        "dcr_sigma":               (">=", 5.0),
+        "delta_tpr":               ("<=", 0.05),
+        "demographic_parity":      (">=", 0.80),
+        "sds_pct":                 ("<=", 15.0),
+        "mt_violation_rate":       ("<=", 10.0),
+        "dcs_score":               (">=", 90.0),
+        "gradcam_iou":             (">=", 0.60),
         "nir_red_attribution_pct": (">=", 50.0),
-        "tac_score": (">=", 0.80),
+        "tac_score":               (">=", 0.80),
     }
 
-    def __init__(self, utility_loss_ceiling_pp: float = 5.0):
+    # Operator polarity (needed when applying custom thresholds from PARC)
+    _THRESHOLD_OPS = {
+        "mia_accuracy":            "<=",
+        "dp_epsilon":              "<=",
+        "dp_delta":                "<=",
+        "dcr_sigma":               ">=",
+        "delta_tpr":               "<=",
+        "demographic_parity":      ">=",
+        "sds_pct":                 "<=",
+        "mt_violation_rate":       "<=",
+        "dcs_score":               ">=",
+        "gradcam_iou":             ">=",
+        "nir_red_attribution_pct": ">=",
+        "tac_score":               ">=",
+    }
+
+    def __init__(
+        self,
+        utility_loss_ceiling_pp: float = 5.0,
+        parc_thresholds: Optional[Dict[str, float]] = None,
+    ):
         self.utility_loss_ceiling_pp = utility_loss_ceiling_pp
+        # Apply PARC-derived thresholds if provided, keeping operator polarity
+        if parc_thresholds:
+            self.THRESHOLDS = {
+                key: (self._THRESHOLD_OPS[key], parc_thresholds[key])
+                for key in self.THRESHOLDS
+                if key in parc_thresholds
+            }
+            logger.info("RAIAssurance: using PARC-derived thresholds.")
 
     def evaluate(
         self,
