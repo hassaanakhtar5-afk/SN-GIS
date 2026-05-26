@@ -20,6 +20,7 @@ from phases.phase3_transparency import Phase3Transparency, DocumentationChecklis
 from phases.phase4_explainability import Phase4Explainability
 from evaluation.assurance import RAIAssurance
 from explainability.visualiser import ExplainabilityVisualiser
+from phases.parc import PARC, PARCResult
 
 logger = get_logger(__name__, log_file="outputs/run.log")
 
@@ -27,6 +28,26 @@ logger = get_logger(__name__, log_file="outputs/run.log")
 def load_config(path: str) -> dict:
     with open(path) as f:
         return yaml.safe_load(f)
+
+
+def run_parc(cfg: dict) -> PARCResult:
+    """
+    Execute PARC on the target dataset prior to the four phases.
+
+    Returns a PARCResult whose fields drive threshold derivation, phase
+    ordering, and configuration selection for the subsequent phases.
+    """
+    parc_cfg = cfg.get("parc", {})
+    parc = PARC(
+        probe_budget=parc_cfg.get("probe_budget", 12),
+        alpha=parc_cfg.get("alpha", 0.05),
+        n_bootstrap=parc_cfg.get("n_bootstrap", 500),
+        de_max_iter=parc_cfg.get("de_max_iter", 200),
+        random_state=parc_cfg.get("random_state", 42),
+        output_dir=cfg["experiment"]["output_dir"],
+    )
+    dataset_stats = parc_cfg.get("dataset_stats") or {}
+    return parc.run(dataset_stats if dataset_stats else None)
 
 
 def build_documentation(cfg: dict, fairness_result, mt_result) -> dict:
@@ -41,14 +62,27 @@ def build_documentation(cfg: dict, fairness_result, mt_result) -> dict:
     }
 
 
-def run_experiment(cfg: dict, exp_key: str, device: torch.device) -> dict:
+def run_experiment(
+    cfg: dict,
+    exp_key: str,
+    device: torch.device,
+    parc_result: PARCResult,
+) -> dict:
     exp_cfg = cfg["data"][exp_key]
     train_cfg = cfg["training"]
     model_cfg = cfg["model"]
 
     logger.info(f"{'='*60}")
     logger.info(f"Running {exp_key}: {exp_cfg['name']}")
+    order_str = " → ".join(parc_result.phase_ordering_names)
+    logger.info(f"PARC phase ordering: {order_str}")
     logger.info(f"{'='*60}")
+
+    # Extract PARC-derived configuration (θ*) for this experiment
+    opt_cfg = parc_result.optimal_config
+    parc_epsilon = opt_cfg.get("epsilon", cfg["phase1"]["epsilon_exp1" if exp_key == "experiment1" else "epsilon_exp2"])
+    parc_lambda1 = opt_cfg.get("lambda1", cfg["phase2"]["lambda1"])
+    parc_lambda2 = opt_cfg.get("lambda2", cfg["phase2"]["lambda2"])
 
     augment = GeospatialAugmentation(
         flip_prob=0.5,
@@ -103,15 +137,16 @@ def run_experiment(cfg: dict, exp_key: str, device: torch.device) -> dict:
     )
 
     p1_cfg = cfg["phase1"]
-    epsilon = p1_cfg["epsilon_exp1"] if exp_key == "experiment1" else p1_cfg["epsilon_exp2"]
     delta = p1_cfg["delta_exp1"] if exp_key == "experiment1" else p1_cfg["delta_exp2"]
 
+    # Use PARC-derived ε and thresholds where available
+    parc_tau = parc_result.thresholds
     phase1 = Phase1Privacy(
-        epsilon=epsilon,
+        epsilon=parc_epsilon,
         delta=delta,
         k_anonymity=p1_cfg["k_anonymity"],
-        dcr_threshold=p1_cfg["dcr_threshold"],
-        mia_threshold=p1_cfg["mia_threshold"],
+        dcr_threshold=parc_tau.get("dcr_sigma", p1_cfg["dcr_threshold"]),
+        mia_threshold=parc_tau.get("mia_accuracy", p1_cfg["mia_threshold"]),
         epsilon_candidates=p1_cfg["epsilon_candidates"],
     )
 
@@ -126,8 +161,8 @@ def run_experiment(cfg: dict, exp_key: str, device: torch.device) -> dict:
         model=model,
         num_classes=exp_cfg["num_classes"],
         num_subgroups=len(exp_cfg["subgroups"]),
-        lambda1=p2_cfg["lambda1"],
-        lambda2=p2_cfg["lambda2"],
+        lambda1=parc_lambda1,
+        lambda2=parc_lambda2,
         lr=train_cfg["lr"],
         lr_min=train_cfg["lr_min"],
         epochs=train_cfg["epochs"],
@@ -135,9 +170,9 @@ def run_experiment(cfg: dict, exp_key: str, device: torch.device) -> dict:
         grad_clip=train_cfg["grad_clip"],
         device=device,
         output_dir=cfg["experiment"]["output_dir"],
-        delta_tpr_threshold=p2_cfg["delta_tpr_threshold"],
-        demographic_parity_threshold=p2_cfg["demographic_parity_threshold"],
-        sds_threshold=p2_cfg["sds_threshold"],
+        delta_tpr_threshold=parc_tau.get("delta_tpr", p2_cfg["delta_tpr_threshold"]),
+        demographic_parity_threshold=parc_tau.get("demographic_parity", p2_cfg["demographic_parity_threshold"]),
+        sds_threshold=parc_tau.get("sds_pct", p2_cfg["sds_threshold"]),
     )
 
     checkpoint_path = f"outputs/checkpoints/{exp_cfg['name']}_best.pth"
@@ -177,8 +212,8 @@ def run_experiment(cfg: dict, exp_key: str, device: torch.device) -> dict:
         model=phase2.model,
         num_classes=exp_cfg["num_classes"],
         n_pairs_per_mr=p3_cfg["mt_pairs_per_relation"],
-        mt_violation_threshold=p3_cfg["mt_violation_threshold"],
-        dcs_threshold=p3_cfg["dcs_threshold"],
+        mt_violation_threshold=parc_tau.get("mt_violation_rate", p3_cfg["mt_violation_threshold"]),
+        dcs_threshold=parc_tau.get("dcs_score", p3_cfg["dcs_threshold"]),
         device=device,
         timestamp_shift_days=p3_cfg["timestamp_shift_days"],
         spectral_offset_pct=p3_cfg["spectral_offset_pct"] / 100.0,
@@ -210,9 +245,9 @@ def run_experiment(cfg: dict, exp_key: str, device: torch.device) -> dict:
         nir_bands=p4_cfg["nir_bands"],
         red_band=p4_cfg["red_band"],
         phenological_windows=p4_cfg["phenological_windows"],
-        gradcam_iou_threshold=p4_cfg["gradcam_iou_threshold"],
-        nir_red_threshold=p4_cfg["nir_red_attribution_threshold"],
-        tac_threshold=p4_cfg["tac_threshold"],
+        gradcam_iou_threshold=parc_tau.get("gradcam_iou", p4_cfg["gradcam_iou_threshold"]),
+        nir_red_threshold=parc_tau.get("nir_red_attribution_pct", p4_cfg["nir_red_attribution_threshold"]),
+        tac_threshold=parc_tau.get("tac_score", p4_cfg["tac_threshold"]),
         device=device,
     )
 
@@ -222,7 +257,10 @@ def run_experiment(cfg: dict, exp_key: str, device: torch.device) -> dict:
     logger.info(f"Phase 4 complete — explainability passed: {explainability_result.passed}")
 
     primary_key = "miou" if exp_key == "experiment1" else "macro_f1"
-    assurance = RAIAssurance(utility_loss_ceiling_pp=cfg["acceptance"]["utility_loss_ceiling_pp"])
+    assurance = RAIAssurance(
+        utility_loss_ceiling_pp=cfg["acceptance"]["utility_loss_ceiling_pp"],
+        parc_thresholds=parc_result.thresholds,
+    )
     report = assurance.evaluate(
         experiment_name=exp_cfg["name"],
         privacy_result=privacy_result,
@@ -246,6 +284,7 @@ def run_experiment(cfg: dict, exp_key: str, device: torch.device) -> dict:
         "explainability": explainability_result,
         "assurance": report,
         "history": history,
+        "parc": parc_result,
     }
 
 
@@ -259,12 +298,29 @@ def main():
     logger.info(f"Device: {device}")
     logger.info(f"Experiment: {cfg['experiment']['name']}")
 
-    results_exp1 = run_experiment(cfg, "experiment1", device)
-    results_exp2 = run_experiment(cfg, "experiment2", device)
+    # PARC runs once on the target dataset before the four phases begin.
+    # Its outputs (derived thresholds, phase ordering, optimal config) drive
+    # both experiments.
+    parc_result = run_parc(cfg)
+
+    if parc_result.infeasible:
+        i, j = parc_result.infeasibility_pair
+        logger.warning(
+            f"PARC returned an infeasibility certificate "
+            f"(binding conflict: {parc_result.criterion_names[i]} ↔ "
+            f"{parc_result.criterion_names[j]}). "
+            "Falling back to default heuristic thresholds."
+        )
+
+    results_exp1 = run_experiment(cfg, "experiment1", device, parc_result)
+    results_exp2 = run_experiment(cfg, "experiment2", device, parc_result)
 
     logger.info("Both experiments complete.")
     logger.info(f"Experiment 1 — all passed: {results_exp1['assurance'].all_passed}")
     logger.info(f"Experiment 2 — all passed: {results_exp2['assurance'].all_passed}")
+    logger.info(
+        f"PARC phase ordering: {' → '.join(parc_result.phase_ordering_names)}"
+    )
 
 
 if __name__ == "__main__":

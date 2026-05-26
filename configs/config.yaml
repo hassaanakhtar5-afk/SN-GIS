@@ -92,3 +92,13 @@ phase4:
 
 acceptance:
   utility_loss_ceiling_pp: 5.0
+
+parc:
+  probe_budget: 12          # K — number of LHS configurations
+  alpha: 0.05               # one-sided significance level for τ derivation
+  n_bootstrap: 500          # bootstrap replicates for reference distributions
+  de_max_iter: 200          # differential-evolution iterations for max-min slack
+  random_state: 42
+  # Optional dataset-specific anchors for threshold derivation.
+  # If omitted, domain priors (DEFAULT_THRESHOLDS) are used.
+  dataset_stats: {}          # e.g. {gradcam_mean: 0.62, gradcam_std: 0.03}
