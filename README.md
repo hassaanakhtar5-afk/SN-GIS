@@ -9,7 +9,7 @@ A four-phase methodology for embedding Privacy, Fairness, Transparency, and Expl
 ```
 rai_geospatial/
 ├── configs/
-│   └── config.yaml              # All hyperparameters and acceptance thresholds
+│   └── config.yaml              # All hyperparameters, acceptance thresholds, and PARC settings
 ├── data/
 │   ├── dataset.py               # GeospatialDataset — loads parcels or pixels
 │   ├── preprocessing.py         # Phase 1 data cleaning and fusion pipelines
@@ -19,6 +19,7 @@ rai_geospatial/
 │   ├── tsvit.py                 # TSViT with dual temporal and spatial attention
 │   └── losses.py                # Fairness-penalised cross-entropy loss
 ├── phases/
+│   ├── parc.py                  # PARC — Pareto-Adaptive R-AI Compliance (pre-phase calibration)
 │   ├── phase1_privacy.py        # Planar Laplace, spatial k-anonymity, DCR, MIA
 │   ├── phase2_training.py       # Fair training with DP-SGD support via Opacus
 │   ├── phase3_transparency.py   # Metamorphic testing (MR1–MR4) and DCS audit
@@ -33,7 +34,7 @@ rai_geospatial/
 │   ├── seed.py                  # Reproducibility seed setting
 │   └── checkpoint.py            # Model checkpoint save/load
 ├── outputs/                     # Generated reports, checkpoints, and figures
-├── run_experiments.py           # Main entry point — runs both experiments end-to-end
+├── run_experiments.py           # Main entry point — runs PARC then both experiments end-to-end
 └── requirements.txt
 ```
 
@@ -46,6 +47,33 @@ Crop type classification using PASTIS/EuroCrops/Sentinel-2 across 9 crop classes
 
 **Experiment 2 — Real-World Generalisability**
 Urban flood risk classification for a UK Sustainable Drainage Systems (SuDS) pilot. Six heterogeneous geospatial sources are fused into a 14-channel input. Five ordinal risk levels are classified across five urban zone types.
+
+---
+
+## PARC — Pareto-Adaptive R-AI Compliance
+
+PARC runs **once** on the target dataset before the four phases begin. It replaces heuristic thresholds with statistically grounded values, makes R-AI characteristic interactions empirically measurable, and selects a configuration that is robust to threshold perturbation.
+
+| Step | What it does | Mechanism |
+|------|-------------|-----------|
+| 0 — Threshold derivation | Anchors each τᵢ to a reference distribution | Bootstrap (500 replicates); one-sided (1−α) quantile per criterion |
+| 1 — Interdependency profiling | Fits GP surrogates, computes **R-AI Interdependency Matrix M** | Latin-hypercube sampling (K=12), Matérn-5/2 GPs, central finite differences at θ₀ |
+| 2 — Adaptive phase reordering | Finds π* minimising destructive inter-phase interference | Exhaustive enumeration of all 4! = 24 orderings |
+| 3 — Max-min slack selection | Selects θ* and emits a **slack certificate** | Differential evolution (~200 evaluations on GP surrogate) |
+
+PARC outputs drive all four phases: derived thresholds replace the fixed values in `config.yaml`, the optimal configuration (ε, λ₁, λ₂) is forwarded to Phase 1–2, and the phase ordering determines evaluation priority. If no feasible configuration exists, PARC returns an **infeasibility certificate** identifying the binding criterion conflict.
+
+Configure PARC in `configs/config.yaml` under the `parc:` key:
+
+```yaml
+parc:
+  probe_budget: 12      # K — LHS configurations for GP fitting
+  alpha: 0.05           # one-sided significance level for τ derivation
+  n_bootstrap: 500      # bootstrap replicates
+  de_max_iter: 200      # differential-evolution iterations
+  random_state: 42
+  dataset_stats: {}     # optional anchors, e.g. {gradcam_mean: 0.62, gradcam_std: 0.03}
+```
 
 ---
 
@@ -77,9 +105,15 @@ cd rai_geospatial
 python run_experiments.py
 ```
 
-This runs both experiments sequentially. Each experiment executes all four phases, runs the cross-phase assurance check, saves a JSON report to `outputs/`, and writes figures to `outputs/figures/`.
+This runs PARC first, then both experiments sequentially. The execution order is:
 
-To modify hyperparameters, acceptance thresholds, or privacy budgets, edit `configs/config.yaml`. All parameters are documented inline in that file.
+1. **PARC** — derives statistically grounded thresholds, computes the Interdependency Matrix, determines the optimal phase ordering, and selects the best configuration (ε, λ₁, λ₂).
+2. **Experiment 1** (PASTIS/EuroCrops) — four phases run with PARC-derived thresholds and configuration.
+3. **Experiment 2** (SuDS Flood Risk) — same, reusing the same PARC result.
+
+PARC output is saved to `outputs/parc_result.json`. Each experiment then executes all four phases, runs the cross-phase assurance check, saves a JSON report to `outputs/`, and writes figures to `outputs/figures/`.
+
+To modify hyperparameters, acceptance thresholds, or PARC settings, edit `configs/config.yaml`.
 
 ---
 
@@ -113,6 +147,7 @@ phase4:
 
 After a successful run, the `outputs/` directory contains:
 
+- `parc_result.json` — PARC outputs: derived thresholds, Interdependency Matrix, phase ordering, optimal config, slack certificate
 - `assurance_report_pastis_eurocrops.json` — full acceptance criteria results for Experiment 1
 - `assurance_report_suds_flood_risk.json` — full acceptance criteria results for Experiment 2
 - `checkpoints/` — best model weights for each experiment
@@ -122,7 +157,13 @@ After a successful run, the `outputs/` directory contains:
 
 ---
 
-## Key Novel Contribution
+## Key Novel Contributions
+
+**PARC (Pareto-Adaptive R-AI Compliance)**, implemented in `phases/parc.py`, contributes three elements absent from prior R-AI pipelines:
+
+1. **Statistically grounded thresholds** — each τᵢ is derived from a reference distribution on the target dataset, removing dependence on heuristic values that may not generalise across datasets.
+2. **R-AI Interdependency Matrix M** — the first empirical measurement of how tightening one RAI criterion (privacy, fairness, transparency, explainability) affects the others, computed from Gaussian Process surrogates fitted to Latin-hypercube probe data.
+3. **Slack certificate** — threshold sensitivity is transformed from a post-hoc check into part of the optimisation objective, producing a certificate that records the margin by which each threshold is satisfied.
 
 The **Temporal Attribution Consistency (TAC)** metric, implemented in `phases/phase4_explainability.py`, measures whether TSViT's temporal attention concentrates on agronomically or hydrologically validated key dates rather than data artefacts such as cloud-free acquisition scheduling patterns. TAC is computed per class against expert-validated phenological or hydrological windows defined in `config.yaml`.
 
