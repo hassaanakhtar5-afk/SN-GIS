@@ -89,6 +89,18 @@ phase4:
     rapeseed: [95, 115]
     sunflower: [210, 240]
     barley: [130, 150, 190, 210]
+  # Fidelity thresholds (Petsiuk et al. 2018; Ancona et al. 2018)
+  deletion_auc_threshold: 0.35       # <= : rapid degradation on high-attr removal
+  insertion_auc_threshold: 0.60      # >= : rapid recovery when high-attr pixels revealed
+  sensitivity_n_threshold: 0.70      # >= : Pearson correlation (attribution completeness)
+  # Stability thresholds
+  perturbation_stability_threshold: 0.70   # >= : Spearman under ±5% spectral offset
+  seed_consistency_threshold: 0.85         # >= : mean pairwise Spearman across seeds
+  # Evaluation parameters
+  n_deletion_steps: 10
+  sensitivity_n_subsets: 20
+  sensitivity_n_ratio: 0.10
+  stability_n_trials: 5
 
 acceptance:
   utility_loss_ceiling_pp: 5.0

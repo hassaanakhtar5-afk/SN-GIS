@@ -248,6 +248,15 @@ def run_experiment(
         gradcam_iou_threshold=parc_tau.get("gradcam_iou", p4_cfg["gradcam_iou_threshold"]),
         nir_red_threshold=parc_tau.get("nir_red_attribution_pct", p4_cfg["nir_red_attribution_threshold"]),
         tac_threshold=parc_tau.get("tac_score", p4_cfg["tac_threshold"]),
+        deletion_auc_threshold=p4_cfg.get("deletion_auc_threshold", 0.35),
+        insertion_auc_threshold=p4_cfg.get("insertion_auc_threshold", 0.60),
+        sensitivity_n_threshold=p4_cfg.get("sensitivity_n_threshold", 0.70),
+        perturbation_stability_threshold=p4_cfg.get("perturbation_stability_threshold", 0.70),
+        seed_consistency_threshold=p4_cfg.get("seed_consistency_threshold", 0.85),
+        n_deletion_steps=p4_cfg.get("n_deletion_steps", 10),
+        sensitivity_n_subsets=p4_cfg.get("sensitivity_n_subsets", 20),
+        sensitivity_n_ratio=p4_cfg.get("sensitivity_n_ratio", 0.10),
+        stability_n_trials=p4_cfg.get("stability_n_trials", 5),
         device=device,
     )
 

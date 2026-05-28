@@ -97,6 +97,12 @@ class RAIAssurance:
             "gradcam_iou": explainability_result.gradcam_iou,
             "nir_red_attribution_pct": explainability_result.nir_red_attribution_pct,
             "tac_score": explainability_result.tac_score,
+            # Fidelity diagnostics (not acceptance criteria — reported for reviewer validation)
+            "deletion_auc": explainability_result.deletion_auc,
+            "insertion_auc": explainability_result.insertion_auc,
+            "sensitivity_n": explainability_result.sensitivity_n,
+            "spectral_stability": explainability_result.spectral_stability,
+            "seed_consistency": explainability_result.seed_consistency,
         }
 
         criteria_pass = self._check_criteria(metrics)
